@@ -3,6 +3,11 @@ import { site } from "@/content/site";
 
 export const runtime = "nodejs";
 
+// The GET diagnostic reports live environment state, so it must never be
+// prerendered or cached — a stale answer here is worse than no answer.
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 type Payload = {
   name?: string;
   email?: string;
@@ -284,6 +289,13 @@ async function deliver(enquiry: Enquiry, apiKey: string): Promise<boolean> {
 }
 
 /** Lets you confirm delivery is configured without exposing any secret. */
+/** Diagnostic responses must never be cached by us or anything in front of us. */
+function status(body: Record<string, unknown>) {
+  return NextResponse.json(body, {
+    headers: { "Cache-Control": "no-store, max-age=0, must-revalidate" },
+  });
+}
+
 export async function GET() {
   const to = recipients()[0];
   const apiKey = process.env.RESEND_API_KEY?.trim();
@@ -292,7 +304,7 @@ export async function GET() {
     "Apex Website <onboarding@resend.dev>";
 
   if (!apiKey) {
-    return NextResponse.json({
+    return status({
       emailDeliveryConfigured: Boolean(to),
       transport: "formsubmit",
       deliveringTo: to,
@@ -331,7 +343,7 @@ export async function GET() {
   const senderReady =
     usingSharedSender || verifiedDomains.includes(senderDomain);
 
-  return NextResponse.json({
+  return status({
     emailDeliveryConfigured: Boolean(to) && keyValid === true && senderReady,
     transport: "resend",
     deliveringTo: to,
