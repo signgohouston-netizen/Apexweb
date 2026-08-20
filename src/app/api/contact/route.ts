@@ -168,8 +168,12 @@ async function deliverViaFormSubmit(
  */
 async function deliver(enquiry: Enquiry, apiKey: string): Promise<boolean> {
   const to = recipients();
+  // Blank env vars are as likely as missing ones, so treat them the same.
+  // onboarding@resend.dev works with no DNS setup, but Resend will only
+  // deliver from it to the address that owns the Resend account.
   const from =
-    process.env.ENQUIRY_FROM_EMAIL ?? "Apex Website <onboarding@resend.dev>";
+    process.env.ENQUIRY_FROM_EMAIL?.trim() ||
+    "Apex Website <onboarding@resend.dev>";
 
   const rows: [string, string][] = [
     ["Name", enquiry.name],
@@ -241,10 +245,30 @@ async function deliver(enquiry: Enquiry, apiKey: string): Promise<boolean> {
       const detail = await res.text();
       // 4xx means the request itself is wrong — retrying will not help.
       if (res.status < 500) {
-        console.error(
-          `[enquiry] Resend rejected the message (${res.status}):`,
-          detail,
-        );
+        if (res.status === 401 || res.status === 403) {
+          if (/domain is not verified|not verified/i.test(detail)) {
+            console.error(
+              `[enquiry] Resend will not send from "${from}" — that domain is ` +
+                "not verified. Either verify it under Domains in Resend, or set " +
+                'ENQUIRY_FROM_EMAIL to "Apex Website <onboarding@resend.dev>".',
+            );
+          } else if (
+            /only send testing emails|own email address/i.test(detail)
+          ) {
+            console.error(
+              `[enquiry] Resend's shared sender can only deliver to the address ` +
+                `that owns the account. Either sign up with ${to[0]}, or verify ` +
+                "your own domain and set ENQUIRY_FROM_EMAIL to an address on it.",
+            );
+          } else {
+            console.error("[enquiry] Resend rejected the API key:", detail);
+          }
+        } else {
+          console.error(
+            `[enquiry] Resend rejected the message (${res.status}):`,
+            detail,
+          );
+        }
         return false;
       }
       console.warn(
@@ -262,14 +286,66 @@ async function deliver(enquiry: Enquiry, apiKey: string): Promise<boolean> {
 /** Lets you confirm delivery is configured without exposing any secret. */
 export async function GET() {
   const to = recipients()[0];
+  const apiKey = process.env.RESEND_API_KEY?.trim();
+  const from =
+    process.env.ENQUIRY_FROM_EMAIL?.trim() ||
+    "Apex Website <onboarding@resend.dev>";
+
+  if (!apiKey) {
+    return NextResponse.json({
+      emailDeliveryConfigured: Boolean(to),
+      transport: "formsubmit",
+      deliveringTo: to,
+      note:
+        "Sending through FormSubmit. Activation is per DOMAIN: the first enquiry " +
+        "from each domain (localhost, preview URLs and your live site are all " +
+        "separate) triggers an 'Activate Form' email — click the link once per domain.",
+    });
+  }
+
+  // Ask Resend whether the key works and which domains are usable, so a
+  // misconfiguration shows up here instead of as a silently lost enquiry.
+  let keyValid: boolean | "unknown" = "unknown";
+  let verifiedDomains: string[] = [];
+  try {
+    const res = await fetch("https://api.resend.com/domains", {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(8_000),
+    });
+    keyValid = res.ok;
+    if (res.ok) {
+      const body = (await res.json()) as {
+        data?: { name?: string; status?: string }[];
+      };
+      verifiedDomains = (body.data ?? [])
+        .filter((d) => d.status === "verified")
+        .map((d) => d.name ?? "")
+        .filter(Boolean);
+    }
+  } catch {
+    keyValid = "unknown";
+  }
+
+  const senderDomain = from.match(/@([^>\s]+)/)?.[1] ?? "";
+  const usingSharedSender = senderDomain === "resend.dev";
+  const senderReady =
+    usingSharedSender || verifiedDomains.includes(senderDomain);
+
   return NextResponse.json({
-    emailDeliveryConfigured: Boolean(to),
-    transport: process.env.RESEND_API_KEY ? "resend" : "formsubmit",
+    emailDeliveryConfigured: Boolean(to) && keyValid === true && senderReady,
+    transport: "resend",
     deliveringTo: to,
-    recipientCount: recipients().length,
-    note: process.env.RESEND_API_KEY
-      ? "Sending through Resend."
-      : "Sending through FormSubmit. Activation is per DOMAIN: the first enquiry from each domain (localhost, preview URLs, and your live site are all separate) triggers an 'Activate Form' email — click the link in it once per domain.",
+    sendingFrom: from,
+    apiKeyValid: keyValid,
+    verifiedDomains,
+    senderReady,
+    note: !keyValid
+      ? "The Resend API key was rejected. Check RESEND_API_KEY."
+      : usingSharedSender
+        ? `Using Resend's shared sender, which can only deliver to the address that owns the Resend account. Make sure that account was created with ${to}. Verify your own domain to remove this limit.`
+        : senderReady
+          ? "Ready. Enquiries will send from your own verified domain."
+          : `"${senderDomain}" is not verified in Resend, so sending will fail. Verify it under Domains, or set ENQUIRY_FROM_EMAIL to "Apex Website <onboarding@resend.dev>".`,
   });
 }
 
@@ -339,15 +415,25 @@ export async function POST(request: Request) {
   const origin = new URL(request.url).origin || site.url;
 
   // Resend when a key is configured, otherwise the no-setup FormSubmit path.
-  const apiKey = process.env.RESEND_API_KEY;
-  const delivered = apiKey
-    ? await deliver(enquiry, apiKey)
-    : await deliverViaFormSubmit(enquiry, origin);
+  // If Resend is configured but fails, fall back rather than lose the lead.
+  const apiKey = process.env.RESEND_API_KEY?.trim();
+  let transport: "resend" | "formsubmit" | null = null;
+
+  if (apiKey && (await deliver(enquiry, apiKey))) {
+    transport = "resend";
+  } else {
+    if (apiKey) {
+      console.warn("[enquiry] Resend failed — falling back to FormSubmit.");
+    }
+    if (await deliverViaFormSubmit(enquiry, origin)) transport = "formsubmit";
+  }
+
+  const delivered = transport !== null;
 
   if (!delivered) {
     // Never drop a lead silently — put the whole thing in the log.
     console.error("[enquiry] DELIVERY FAILED — enquiry follows:", enquiry);
   }
 
-  return NextResponse.json({ ok: true, delivered });
+  return NextResponse.json({ ok: true, delivered, transport });
 }

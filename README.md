@@ -144,27 +144,69 @@ Check delivery status any time by opening `/api/contact` in a browser:
 { "transport": "formsubmit", "deliveringTo": "apexwebsolutionsuk@gmail.com" }
 ```
 
-### Upgrading to your own domain (optional, better long-term)
+### Switching to Resend (send from your own domain)
 
-Sending from `enquiries@apexwebsolutionsuk.com` looks more professional, keeps
-customer data out of a third-party forwarder, and is less likely to hit spam.
-When you want that:
+Sending from `enquiries@apexwebsolutionsuk.com` looks professional, keeps
+customer data out of a third-party forwarder, and removes FormSubmit's
+per-domain activation step.
 
-1. Sign up at [resend.com](https://resend.com) and verify `apexwebsolutionsuk.com`
-   under *Domains*.
-2. Create an API key.
-3. `cp .env.example .env.local`, paste it into `RESEND_API_KEY`, set
-   `ENQUIRY_FROM_EMAIL` to your own address, and restart.
+**Step 1 — get it sending (2 minutes, no DNS needed)**
 
-The endpoint switches to Resend automatically the moment a key is present — no
-code change. `/api/contact` will then report `"transport": "resend"`.
+1. Sign up at [resend.com](https://resend.com) **using apexwebsolutionsuk@gmail.com**.
+   Until a domain is verified, Resend's shared sender delivers only to the
+   address that owns the account, so this must match.
+2. Create an API key under *API Keys*.
+3. In Vercel → *Settings → Environment Variables*, add:
+
+   | Name | Value |
+   | --- | --- |
+   | `RESEND_API_KEY` | the key you just created |
+   | `ENQUIRY_TO_EMAIL` | `apexwebsolutionsuk@gmail.com` |
+
+   Leave `ENQUIRY_FROM_EMAIL` unset for now. **Make sure no variable is saved
+   with an empty value** — a blank `ENQUIRY_TO_EMAIL` is what silently broke
+   delivery once already.
+4. Redeploy, then open `/api/contact` and check `"emailDeliveryConfigured": true`.
+
+**Step 2 — send from your own domain (when you have 10 minutes)**
+
+1. In Resend, *Domains → Add Domain* → `apexwebsolutionsuk.com`.
+2. Add the DNS records it shows you (an MX and two TXT records) at whoever
+   runs your DNS. Verification usually completes within the hour.
+3. Set `ENQUIRY_FROM_EMAIL` in Vercel to
+   `Apex Website <enquiries@apexwebsolutionsuk.com>` and redeploy.
+4. `/api/contact` will list the domain under `verifiedDomains` and report
+   `"senderReady": true`.
+
+### Checking the setup
+
+`GET /api/contact` is a live diagnostic. With Resend configured it validates the
+key against the Resend API and reports which domains are actually verified:
+
+```json
+{
+  "transport": "resend",
+  "deliveringTo": "apexwebsolutionsuk@gmail.com",
+  "sendingFrom": "Apex Website <enquiries@apexwebsolutionsuk.com>",
+  "apiKeyValid": true,
+  "verifiedDomains": ["apexwebsolutionsuk.com"],
+  "senderReady": true
+}
+```
+
+If something is wrong, `note` says exactly what to change.
 
 ### If delivery ever fails
 
-Nothing is lost. The full submission is written to the server log, the visitor
-still sees a success message with your phone number and email as a fallback,
-and the response reports `delivered: false`. Transient network and 5xx errors
-are retried once; a 4xx is logged rather than retried.
+Nothing is lost. If Resend is configured but fails for any reason — bad key,
+unverified sender, an outage — the enquiry is automatically re-sent through
+FormSubmit instead, and the response reports which transport actually delivered
+it. Keep FormSubmit activated on your live domain so that safety net works.
+
+If both fail, the full submission is written to the server log, the visitor
+still sees a success message with your phone number and email, and the response
+reports `delivered: false`. Transient network and 5xx errors are retried once;
+a 4xx is logged with the specific fix rather than retried.
 
 Want enquiries in a CRM instead? Both transports live in one file:
 [`src/app/api/contact/route.ts`](src/app/api/contact/route.ts).
