@@ -317,15 +317,18 @@ export async function GET() {
 
   // Ask Resend whether the key works and which domains are usable, so a
   // misconfiguration shows up here instead of as a silently lost enquiry.
-  let keyValid: boolean | "unknown" = "unknown";
+  // A "Sending access" key can send mail but cannot list domains, so a refusal
+  // here does NOT mean the key is broken — only an explicit "invalid" does.
+  let keyValid: boolean | "restricted" | "unknown" = "unknown";
   let verifiedDomains: string[] = [];
   try {
     const res = await fetch("https://api.resend.com/domains", {
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: AbortSignal.timeout(8_000),
     });
-    keyValid = res.ok;
+
     if (res.ok) {
+      keyValid = true;
       const body = (await res.json()) as {
         data?: { name?: string; status?: string }[];
       };
@@ -333,6 +336,11 @@ export async function GET() {
         .filter((d) => d.status === "verified")
         .map((d) => d.name ?? "")
         .filter(Boolean);
+    } else {
+      const detail = await res.text();
+      keyValid = /api key is invalid|invalid api key/i.test(detail)
+        ? false
+        : "restricted";
     }
   } catch {
     keyValid = "unknown";
@@ -341,23 +349,29 @@ export async function GET() {
   const senderDomain = from.match(/@([^>\s]+)/)?.[1] ?? "";
   const usingSharedSender = senderDomain === "resend.dev";
   const senderReady =
-    usingSharedSender || verifiedDomains.includes(senderDomain);
+    usingSharedSender ||
+    verifiedDomains.includes(senderDomain) ||
+    // The domain list is unreadable with this key, so don't cry wolf.
+    keyValid !== true;
 
   return status({
-    emailDeliveryConfigured: Boolean(to) && keyValid === true && senderReady,
+    emailDeliveryConfigured: Boolean(to) && keyValid !== false && senderReady,
     transport: "resend",
     deliveringTo: to,
     sendingFrom: from,
     apiKeyValid: keyValid,
     verifiedDomains,
     senderReady,
-    note: !keyValid
-      ? "The Resend API key was rejected. Check RESEND_API_KEY."
-      : usingSharedSender
-        ? `Using Resend's shared sender, which can only deliver to the address that owns the Resend account. Make sure that account was created with ${to}. Verify your own domain to remove this limit.`
-        : senderReady
-          ? "Ready. Enquiries will send from your own verified domain."
-          : `"${senderDomain}" is not verified in Resend, so sending will fail. Verify it under Domains, or set ENQUIRY_FROM_EMAIL to "Apex Website <onboarding@resend.dev>".`,
+    note:
+      keyValid === false
+        ? "The Resend API key was rejected. Check RESEND_API_KEY."
+        : keyValid === "restricted"
+          ? `Key accepted with sending-only access, so the verified-domain list cannot be read from here. That is normal and sending is unaffected. Using ${usingSharedSender ? "Resend's shared sender, which only delivers to the address that owns the Resend account" : senderDomain}.`
+          : usingSharedSender
+            ? `Using Resend's shared sender, which can only deliver to the address that owns the Resend account. Make sure that account was created with ${to}. Verify your own domain to remove this limit.`
+            : senderReady
+              ? "Ready. Enquiries will send from your own verified domain."
+              : `"${senderDomain}" is not verified in Resend, so sending will fail. Verify it under Domains, or set ENQUIRY_FROM_EMAIL to "Apex Website <onboarding@resend.dev>".`,
   });
 }
 
