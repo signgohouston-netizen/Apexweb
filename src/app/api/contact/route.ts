@@ -32,13 +32,23 @@ function escapeHtml(value: string) {
     .replace(/"/g, "&quot;");
 }
 
-/** Recipients for enquiry notifications. Supports a comma-separated list. */
+/**
+ * Recipients for enquiry notifications. Supports a comma-separated list.
+ *
+ * Falls back to the address in site.ts whenever the environment variable is
+ * missing OR blank — a variable defined with an empty value is easy to create
+ * by accident on a hosting dashboard, and silently having no recipient means
+ * every enquiry is dropped.
+ */
 function recipients() {
-  const configured = process.env.ENQUIRY_TO_EMAIL ?? site.contact.email;
-  return configured
-    .split(",")
-    .map((address) => address.trim())
-    .filter(Boolean);
+  const parse = (value: string | undefined) =>
+    (value ?? "")
+      .split(",")
+      .map((address) => address.trim())
+      .filter(Boolean);
+
+  const configured = parse(process.env.ENQUIRY_TO_EMAIL);
+  return configured.length > 0 ? configured : parse(site.contact.email);
 }
 
 type Enquiry = {
@@ -70,7 +80,13 @@ async function deliverViaFormSubmit(
   origin: string,
 ): Promise<boolean> {
   const [to] = recipients();
-  if (!to) return false;
+  if (!to) {
+    console.error(
+      "[enquiry] No recipient address configured — check ENQUIRY_TO_EMAIL. " +
+        "The enquiry was NOT emailed.",
+    );
+    return false;
+  }
 
   // Keys become the labels in the forwarded email, so they read as English.
   const payload = {
@@ -244,9 +260,9 @@ async function deliver(enquiry: Enquiry, apiKey: string): Promise<boolean> {
 
 /** Lets you confirm delivery is configured without exposing any secret. */
 export async function GET() {
-  const [to] = recipients();
+  const to = recipients()[0];
   return NextResponse.json({
-    emailDeliveryConfigured: true,
+    emailDeliveryConfigured: Boolean(to),
     transport: process.env.RESEND_API_KEY ? "resend" : "formsubmit",
     deliveringTo: to,
     recipientCount: recipients().length,
