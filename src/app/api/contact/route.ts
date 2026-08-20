@@ -66,9 +66,10 @@ type Enquiry = {
 
 /**
  * Sends via FormSubmit (https://formsubmit.co) — a free forwarding service
- * that needs no account. The first submission to a given address triggers a
+ * that needs no account. The first submission from a given DOMAIN triggers a
  * one-time confirmation email; once the link in it is clicked, every later
- * submission forwards straight to that inbox.
+ * submission from that domain forwards straight to the inbox. Activation is
+ * per origin, so a live site needs activating separately from localhost.
  *
  * Used automatically whenever RESEND_API_KEY is absent, so enquiries reach
  * you with zero configuration.
@@ -132,9 +133,9 @@ async function deliverViaFormSubmit(
         if (/"success"\s*:\s*"?true"?/i.test(detail)) return true;
         if (/needs Activation/i.test(detail)) {
           console.error(
-            `[enquiry] FormSubmit needs one-time activation. Check ${to} for an ` +
-              "'Activate Form' email from FormSubmit and click the link. " +
-              "Enquiries will forward automatically from then on.",
+            `[enquiry] FormSubmit needs activation for ${origin}. Check ${to} for ` +
+              "an 'Activate Form' email and click the link. Note that FormSubmit " +
+              "activates per domain, so each origin needs this once.",
           );
           return false;
         }
@@ -268,7 +269,7 @@ export async function GET() {
     recipientCount: recipients().length,
     note: process.env.RESEND_API_KEY
       ? "Sending through Resend."
-      : "Sending through FormSubmit. The first enquiry to a new address triggers a one-time confirmation email — click the link in it to activate forwarding.",
+      : "Sending through FormSubmit. Activation is per DOMAIN: the first enquiry from each domain (localhost, preview URLs, and your live site are all separate) triggers an 'Activate Form' email — click the link in it once per domain.",
   });
 }
 

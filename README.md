@@ -129,9 +129,14 @@ is set as the reply-to.
 **This works out of the box, with no account and no configuration.**
 
 Delivery runs through [FormSubmit](https://formsubmit.co), a free forwarding
-service that needs no signup. The first enquiry sent to a new address triggers a
-one-time *"Activate Form"* email; click the link in it once and every later
-submission forwards automatically.
+service that needs no signup. The first enquiry sent triggers a one-time
+*"Activate Form"* email; click the link in it and every later submission
+forwards automatically.
+
+> **FormSubmit activates per domain, not per email address.** `localhost`, each
+> Vercel preview URL, and your live domain are separate forms to them, so each
+> one needs its own activation click the first time it sends. If enquiries work
+> locally but not in production, this is almost always why.
 
 Check delivery status any time by opening `/api/contact` in a browser:
 
