@@ -1,26 +1,171 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* ============================================================
+   APEX WEB SOLUTIONS UK — DESIGN SYSTEM
+   Brand: deep forest green #0B3B2D + antique gold #B08540
+   ============================================================ */
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+@theme {
+  /* -- Brand greens -- */
+  --color-forest-950: #04180F;
+  --color-forest-900: #06251C;
+  --color-forest-800: #0B3B2D;
+  --color-forest-700: #10513D;
+  --color-forest-600: #17694F;
+  --color-forest-500: #228766;
+  --color-forest-400: #3FA787;
+  --color-forest-300: #6FC6AC;
+  --color-forest-200: #A7DFCE;
+  --color-forest-100: #D8F1E8;
+  --color-forest-50:  #EFF9F5;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  /* -- Brand golds -- */
+  --color-gold-700: #8A6526;
+  --color-gold-600: #A67C31;
+  --color-gold-500: #B08540;
+  --color-gold-400: #C9A24D;
+  --color-gold-300: #DDBE79;
+  --color-gold-200: #EBD6A6;
+  --color-gold-100: #F5EAD1;
+
+  /* -- Neutrals -- */
+  --color-cream: #F8F6F0;
+  --color-ink: #10221B;
+  --color-muted: #5C7168;
+
+  /* -- Type -- */
+  --font-display: var(--font-playfair), Georgia, "Times New Roman", serif;
+  --font-sans: var(--font-manrope), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* -- Motion -- */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* -- Animations -- */
+  --animate-marquee: marquee 40s linear infinite;
+  --animate-float: float 7s ease-in-out infinite;
+  --animate-shimmer: shimmer 3s linear infinite;
+
+  @keyframes marquee {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-50%); }
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-14px); }
+  }
+  @keyframes shimmer {
+    from { background-position: 200% center; }
+    to   { background-position: -200% center; }
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* ============================================================
+   BASE
+   ============================================================ */
+
+@layer base {
+  * {
+    border-color: color-mix(in oklab, var(--color-forest-800) 12%, transparent);
+  }
+
+  html {
+    scroll-behavior: smooth;
+    scroll-padding-top: 6rem;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-cream);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv02", "cv03", "cv04", "ss01";
+    text-rendering: optimizeLegibility;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+
+  p { text-wrap: pretty; }
+
+  ::selection {
+    background-color: var(--color-gold-400);
+    color: var(--color-forest-950);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-gold-400);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* ============================================================
+   UTILITIES
+   ============================================================ */
+
+@utility container-x {
+  width: 100%;
+  margin-inline: auto;
+  max-width: 80rem;
+  padding-inline: 1.25rem;
+  @media (min-width: 768px) { padding-inline: 2rem; }
+  @media (min-width: 1280px) { padding-inline: 2.5rem; }
+}
+
+/* Gold gradient text for accent words */
+@utility text-gold-gradient {
+  background-image: linear-gradient(
+    100deg,
+    var(--color-gold-600) 0%,
+    var(--color-gold-300) 38%,
+    var(--color-gold-100) 50%,
+    var(--color-gold-300) 62%,
+    var(--color-gold-600) 100%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: var(--animate-shimmer);
+}
+
+/* Hairline gold rule */
+@utility rule-gold {
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-gold-500) 20%,
+    var(--color-gold-300) 50%,
+    var(--color-gold-500) 80%,
+    transparent
+  );
+}
+
+/* Frosted card on dark backgrounds */
+@utility glass-dark {
+  background-color: color-mix(in oklab, var(--color-forest-100) 6%, transparent);
+  backdrop-filter: blur(14px);
+  border: 1px solid color-mix(in oklab, var(--color-gold-300) 18%, transparent);
+}
+
+/* Subtle noise/vignette layer for dark sections */
+@utility bg-emerald-mesh {
+  background-color: var(--color-forest-950);
+  background-image:
+    radial-gradient(60rem 40rem at 12% -10%, color-mix(in oklab, var(--color-forest-500) 34%, transparent), transparent 60%),
+    radial-gradient(46rem 34rem at 92% 8%, color-mix(in oklab, var(--color-gold-500) 16%, transparent), transparent 62%),
+    radial-gradient(50rem 40rem at 50% 108%, color-mix(in oklab, var(--color-forest-700) 46%, transparent), transparent 65%);
 }
