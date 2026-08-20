@@ -122,22 +122,35 @@ plan data, so there is nothing else to keep in sync.
 
 ## Wiring up the enquiry form
 
-The contact and quote forms POST to `/api/contact`, which validates input and
-filters bots with a honeypot field.
+Every contact and quote submission is emailed to **apexwebsolutionsuk@gmail.com**
+(set by `ENQUIRY_TO_EMAIL`; comma-separate the value to notify more than one
+address). Replying to the notification goes straight back to the customer —
+their address is set as the reply-to.
 
-- **Without configuration** it still works: the submission is logged server-side
-  and the visitor sees your phone and email as a fallback, so nothing is lost
-  silently.
-- **To receive emails**, copy `.env.example` to `.env.local` and add a
-  [Resend](https://resend.com) API key. No extra package needed — the route
-  calls the REST API directly.
+**This needs one five-minute setup step before any email arrives.**
 
-```bash
-cp .env.example .env.local
-```
+1. Sign up at [resend.com](https://resend.com) **using apexwebsolutionsuk@gmail.com**.
+   The address matters: until you verify your own domain, Resend's default
+   sender can only deliver to the address that owns the account.
+2. Create an API key under *API Keys*.
+3. `cp .env.example .env.local`, paste the key into `RESEND_API_KEY`, and
+   restart the server.
+4. Visit `/api/contact` in a browser. It should report
+   `"emailDeliveryConfigured": true`.
+5. Send yourself a test through `/quote` and check the inbox.
 
-Prefer a different provider or a CRM? Replace the single `fetch` call in
-[`src/app/api/contact/route.ts`](src/app/api/contact/route.ts).
+Later, verify `apexwebsolutionsuk.com` in Resend under *Domains* and change
+`ENQUIRY_FROM_EMAIL` to `enquiries@apexwebsolutionsuk.com`. Mail from your own
+verified domain looks more professional and is far less likely to land in spam.
+
+**If sending is not configured, or a send fails**, the enquiry is not lost: the
+full submission is written to the server log, the visitor still sees a success
+message with your phone number and email as a fallback, and the response
+reports `delivered: false`. Transient network and 5xx errors are retried once;
+a 4xx (bad key, unverified sender) is logged as an error rather than retried.
+
+Prefer a different provider or want enquiries in a CRM? Replace the single
+`fetch` call in [`src/app/api/contact/route.ts`](src/app/api/contact/route.ts).
 
 ---
 

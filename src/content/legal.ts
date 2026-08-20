@@ -41,7 +41,7 @@ export const legalDocs: LegalDoc[] = [
       {
         heading: "Who we are",
         body: [
-          `${company} is the data controller for information collected through this website. You can reach us at apexwebsolutionsuk@gmail.com or on +44 7377 349883.`,
+          `${company} is the data controller for information collected through this website. You can reach us at ${site.contact.email} or on ${site.contact.phone}.`,
           registrationLine(),
         ],
       },
@@ -80,7 +80,7 @@ export const legalDocs: LegalDoc[] = [
         heading: "Your rights",
         body: [
           "Under UK GDPR you can ask us for a copy of the personal data we hold about you, ask us to correct it, ask us to delete it, or object to how we use it.",
-          "Email apexwebsolutionsuk@gmail.com and we will respond within one month.",
+          `Email ${site.contact.email} and we will respond within one month.`,
           "If you are unhappy with how we have handled your data, you can complain to the Information Commissioner's Office at ico.org.uk.",
         ],
       },

@@ -24,12 +24,150 @@ function clean(value: unknown, max: number) {
 
 const emailLooksValid = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v);
 
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Recipients for enquiry notifications. Supports a comma-separated list. */
+function recipients() {
+  const configured = process.env.ENQUIRY_TO_EMAIL ?? site.contact.email;
+  return configured
+    .split(",")
+    .map((address) => address.trim())
+    .filter(Boolean);
+}
+
+type Enquiry = {
+  name: string;
+  email: string;
+  phone: string;
+  company: string;
+  services: string[];
+  budget: string;
+  timeline: string;
+  source: string;
+  message: string;
+  receivedAt: string;
+};
+
+/**
+ * Sends the notification through Resend, retrying once on a transient
+ * failure (network error or 5xx). Returns true only on a confirmed send.
+ */
+async function deliver(enquiry: Enquiry, apiKey: string): Promise<boolean> {
+  const to = recipients();
+  const from =
+    process.env.ENQUIRY_FROM_EMAIL ?? "Apex Website <onboarding@resend.dev>";
+
+  const rows: [string, string][] = [
+    ["Name", enquiry.name],
+    ["Email", enquiry.email],
+    ["Phone", enquiry.phone || "—"],
+    ["Company", enquiry.company || "—"],
+    ["Services", enquiry.services.join(", ") || "—"],
+    ["Budget", enquiry.budget || "—"],
+    ["Timeline", enquiry.timeline || "—"],
+    ["Came from", enquiry.source],
+  ];
+
+  const html = `
+    <div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:640px;color:#10221B">
+      <div style="background:#0B3B2D;padding:20px 24px;border-radius:10px 10px 0 0">
+        <h2 style="margin:0;color:#F8F6F0;font-size:19px">New enquiry from your website</h2>
+        <p style="margin:6px 0 0;color:#A7DFCE;font-size:13px">${escapeHtml(enquiry.receivedAt)}</p>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:14px">
+        ${rows
+          .map(
+            ([k, v]) =>
+              `<tr><td style="padding:9px 12px;background:#F8F6F0;border:1px solid #E6E2D8;font-weight:600;width:130px">${k}</td><td style="padding:9px 12px;border:1px solid #E6E2D8">${escapeHtml(v)}</td></tr>`,
+          )
+          .join("")}
+      </table>
+      <h3 style="color:#0B3B2D;margin:24px 0 8px;font-size:15px">Message</h3>
+      <p style="white-space:pre-wrap;line-height:1.6;font-size:14px;margin:0">${escapeHtml(enquiry.message)}</p>
+      <p style="margin:24px 0 0;font-size:13px;color:#5C7168">
+        Reply to this email and it goes straight back to ${escapeHtml(enquiry.name)}.
+      </p>
+    </div>`;
+
+  const text = [
+    "New enquiry from your website",
+    enquiry.receivedAt,
+    "",
+    ...rows.map(([k, v]) => `${k}: ${v}`),
+    "",
+    "Message:",
+    enquiry.message,
+    "",
+    `Reply to this email to respond to ${enquiry.name} directly.`,
+  ].join("\n");
+
+  const body = JSON.stringify({
+    from,
+    to,
+    reply_to: enquiry.email,
+    subject: `New enquiry — ${enquiry.name}${enquiry.company ? ` (${enquiry.company})` : ""}`,
+    html,
+    text,
+  });
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body,
+        signal: AbortSignal.timeout(10_000),
+      });
+
+      if (res.ok) return true;
+
+      const detail = await res.text();
+      // 4xx means the request itself is wrong — retrying will not help.
+      if (res.status < 500) {
+        console.error(
+          `[enquiry] Resend rejected the message (${res.status}):`,
+          detail,
+        );
+        return false;
+      }
+      console.warn(
+        `[enquiry] Resend error ${res.status} on attempt ${attempt}:`,
+        detail,
+      );
+    } catch (error) {
+      console.warn(`[enquiry] Send attempt ${attempt} failed:`, error);
+    }
+  }
+
+  return false;
+}
+
+/** Lets you confirm delivery is configured without exposing any secret. */
+export async function GET() {
+  return NextResponse.json({
+    emailDeliveryConfigured: Boolean(process.env.RESEND_API_KEY),
+    recipientCount: recipients().length,
+  });
+}
+
 /**
  * Handles quote and contact submissions.
  *
- * Email delivery is sent through Resend when RESEND_API_KEY is present.
- * Without it the submission is logged server-side and the response reports
- * `delivered: false`, so the UI can show the direct contact details instead.
+ * Every valid enquiry is emailed to ENQUIRY_TO_EMAIL (defaulting to the
+ * address in src/content/site.ts). If RESEND_API_KEY is missing or the
+ * send fails, the full enquiry is written to the server log so it is
+ * never lost, and the response reports `delivered: false` so the UI can
+ * show the direct phone and email instead.
+ *
  * See README → "Wiring up the enquiry form".
  */
 export async function POST(request: Request) {
@@ -62,101 +200,44 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, errors }, { status: 422 });
   }
 
-  const services = Array.isArray(body.services)
-    ? body.services
-        .slice(0, 12)
-        .map((s) => clean(s, 60))
-        .filter(Boolean)
-    : [];
-
-  const enquiry = {
+  const enquiry: Enquiry = {
     name,
     email,
     phone: clean(body.phone, MAX.phone),
     company: clean(body.company, MAX.company),
-    services,
+    services: Array.isArray(body.services)
+      ? body.services
+          .slice(0, 12)
+          .map((s) => clean(s, 60))
+          .filter(Boolean)
+      : [],
     budget: clean(body.budget, 60),
     timeline: clean(body.timeline, 60),
     source: clean(body.source, 60) || "website",
     message,
-    receivedAt: new Date().toISOString(),
+    receivedAt: new Date().toLocaleString("en-GB", {
+      timeZone: "Europe/London",
+      dateStyle: "full",
+      timeStyle: "short",
+    }),
   };
 
   const apiKey = process.env.RESEND_API_KEY;
-  const to = process.env.ENQUIRY_TO_EMAIL ?? site.contact.email;
-  const from =
-    process.env.ENQUIRY_FROM_EMAIL ?? "Apex Website <onboarding@resend.dev>";
 
   if (!apiKey) {
     console.warn(
-      "[enquiry] RESEND_API_KEY is not set — logging submission instead of emailing it.",
+      "[enquiry] RESEND_API_KEY is not set — no email was sent. Enquiry follows:",
       enquiry,
     );
     return NextResponse.json({ ok: true, delivered: false });
   }
 
-  const rows = [
-    ["Name", enquiry.name],
-    ["Email", enquiry.email],
-    ["Phone", enquiry.phone || "—"],
-    ["Company", enquiry.company || "—"],
-    ["Services", services.join(", ") || "—"],
-    ["Budget", enquiry.budget || "—"],
-    ["Timeline", enquiry.timeline || "—"],
-    ["Source", enquiry.source],
-  ];
+  const delivered = await deliver(enquiry, apiKey);
 
-  const html = `
-    <div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:640px">
-      <h2 style="color:#0B3B2D;margin:0 0 4px">New enquiry from the website</h2>
-      <p style="color:#5C7168;margin:0 0 20px;font-size:14px">${enquiry.receivedAt}</p>
-      <table style="width:100%;border-collapse:collapse;font-size:14px">
-        ${rows
-          .map(
-            ([k, v]) =>
-              `<tr><td style="padding:8px 12px;background:#F8F6F0;border:1px solid #e6e2d8;font-weight:600;width:130px">${k}</td><td style="padding:8px 12px;border:1px solid #e6e2d8">${escapeHtml(v)}</td></tr>`,
-          )
-          .join("")}
-      </table>
-      <h3 style="color:#0B3B2D;margin:24px 0 8px">Message</h3>
-      <p style="white-space:pre-wrap;line-height:1.6;font-size:14px">${escapeHtml(enquiry.message)}</p>
-    </div>`;
-
-  try {
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from,
-        to: [to],
-        reply_to: enquiry.email,
-        subject: `New enquiry — ${enquiry.name}${enquiry.company ? ` (${enquiry.company})` : ""}`,
-        html,
-      }),
-    });
-
-    if (!res.ok) {
-      console.error(
-        "[enquiry] Resend rejected the message:",
-        res.status,
-        await res.text(),
-      );
-      return NextResponse.json({ ok: true, delivered: false });
-    }
-    return NextResponse.json({ ok: true, delivered: true });
-  } catch (error) {
-    console.error("[enquiry] Failed to send:", error);
-    return NextResponse.json({ ok: true, delivered: false });
+  if (!delivered) {
+    // Never drop a lead silently — put the whole thing in the log.
+    console.error("[enquiry] DELIVERY FAILED — enquiry follows:", enquiry);
   }
-}
 
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+  return NextResponse.json({ ok: true, delivered });
 }
