@@ -55,6 +55,97 @@ type Enquiry = {
 };
 
 /**
+ * Sends via FormSubmit (https://formsubmit.co) — a free forwarding service
+ * that needs no account. The first submission to a given address triggers a
+ * one-time confirmation email; once the link in it is clicked, every later
+ * submission forwards straight to that inbox.
+ *
+ * Used automatically whenever RESEND_API_KEY is absent, so enquiries reach
+ * you with zero configuration.
+ *
+ * `origin` is required: FormSubmit rejects requests with no Origin/Referer.
+ */
+async function deliverViaFormSubmit(
+  enquiry: Enquiry,
+  origin: string,
+): Promise<boolean> {
+  const [to] = recipients();
+  if (!to) return false;
+
+  // Keys become the labels in the forwarded email, so they read as English.
+  const payload = {
+    _subject: `New enquiry — ${enquiry.name}${enquiry.company ? ` (${enquiry.company})` : ""}`,
+    _replyto: enquiry.email,
+    _template: "table",
+    _captcha: "false",
+    Name: enquiry.name,
+    Email: enquiry.email,
+    Phone: enquiry.phone || "—",
+    Company: enquiry.company || "—",
+    Services: enquiry.services.join(", ") || "—",
+    Budget: enquiry.budget || "—",
+    Timeline: enquiry.timeline || "—",
+    "Came from": enquiry.source,
+    Received: enquiry.receivedAt,
+    Message: enquiry.message,
+  };
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await fetch(
+        `https://formsubmit.co/ajax/${encodeURIComponent(to)}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            // FormSubmit rejects requests that carry no Origin/Referer, so we
+            // present the site's own origin.
+            Origin: origin,
+            Referer: `${origin}/quote`,
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(12_000),
+        },
+      );
+
+      const detail = await res.text();
+
+      if (res.ok) {
+        // FormSubmit answers 200 with success:"false" for a rejected send.
+        if (/"success"\s*:\s*"?true"?/i.test(detail)) return true;
+        if (/needs Activation/i.test(detail)) {
+          console.error(
+            `[enquiry] FormSubmit needs one-time activation. Check ${to} for an ` +
+              "'Activate Form' email from FormSubmit and click the link. " +
+              "Enquiries will forward automatically from then on.",
+          );
+          return false;
+        }
+        console.error("[enquiry] FormSubmit declined the message:", detail);
+        return false;
+      }
+
+      if (res.status < 500) {
+        console.error(
+          `[enquiry] FormSubmit rejected the request (${res.status}):`,
+          detail,
+        );
+        return false;
+      }
+      console.warn(
+        `[enquiry] FormSubmit error ${res.status} on attempt ${attempt}:`,
+        detail,
+      );
+    } catch (error) {
+      console.warn(`[enquiry] FormSubmit attempt ${attempt} failed:`, error);
+    }
+  }
+
+  return false;
+}
+
+/**
  * Sends the notification through Resend, retrying once on a transient
  * failure (network error or 5xx). Returns true only on a confirmed send.
  */
@@ -153,9 +244,15 @@ async function deliver(enquiry: Enquiry, apiKey: string): Promise<boolean> {
 
 /** Lets you confirm delivery is configured without exposing any secret. */
 export async function GET() {
+  const [to] = recipients();
   return NextResponse.json({
-    emailDeliveryConfigured: Boolean(process.env.RESEND_API_KEY),
+    emailDeliveryConfigured: true,
+    transport: process.env.RESEND_API_KEY ? "resend" : "formsubmit",
+    deliveringTo: to,
     recipientCount: recipients().length,
+    note: process.env.RESEND_API_KEY
+      ? "Sending through Resend."
+      : "Sending through FormSubmit. The first enquiry to a new address triggers a one-time confirmation email — click the link in it to activate forwarding.",
   });
 }
 
@@ -222,17 +319,13 @@ export async function POST(request: Request) {
     }),
   };
 
+  const origin = new URL(request.url).origin || site.url;
+
+  // Resend when a key is configured, otherwise the no-setup FormSubmit path.
   const apiKey = process.env.RESEND_API_KEY;
-
-  if (!apiKey) {
-    console.warn(
-      "[enquiry] RESEND_API_KEY is not set — no email was sent. Enquiry follows:",
-      enquiry,
-    );
-    return NextResponse.json({ ok: true, delivered: false });
-  }
-
-  const delivered = await deliver(enquiry, apiKey);
+  const delivered = apiKey
+    ? await deliver(enquiry, apiKey)
+    : await deliverViaFormSubmit(enquiry, origin);
 
   if (!delivered) {
     // Never drop a lead silently — put the whole thing in the log.

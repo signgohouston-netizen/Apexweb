@@ -120,37 +120,49 @@ save" percentages are calculated, not typed, so they can't drift.
 services pages and the comparison table all derive from `startingPrices` and the
 plan data, so there is nothing else to keep in sync.
 
-## Wiring up the enquiry form
+## Where enquiries go
 
-Every contact and quote submission is emailed to **apexwebsolutionsuk@gmail.com**
-(set by `ENQUIRY_TO_EMAIL`; comma-separate the value to notify more than one
-address). Replying to the notification goes straight back to the customer —
-their address is set as the reply-to.
+Every contact and quote submission is emailed to **apexwebsolutionsuk@gmail.com**.
+Replying to the notification goes straight back to the customer — their address
+is set as the reply-to.
 
-**This needs one five-minute setup step before any email arrives.**
+**This works out of the box, with no account and no configuration.**
 
-1. Sign up at [resend.com](https://resend.com) **using apexwebsolutionsuk@gmail.com**.
-   The address matters: until you verify your own domain, Resend's default
-   sender can only deliver to the address that owns the account.
-2. Create an API key under *API Keys*.
-3. `cp .env.example .env.local`, paste the key into `RESEND_API_KEY`, and
-   restart the server.
-4. Visit `/api/contact` in a browser. It should report
-   `"emailDeliveryConfigured": true`.
-5. Send yourself a test through `/quote` and check the inbox.
+Delivery runs through [FormSubmit](https://formsubmit.co), a free forwarding
+service that needs no signup. The first enquiry sent to a new address triggers a
+one-time *"Activate Form"* email; click the link in it once and every later
+submission forwards automatically.
 
-Later, verify `apexwebsolutionsuk.com` in Resend under *Domains* and change
-`ENQUIRY_FROM_EMAIL` to `enquiries@apexwebsolutionsuk.com`. Mail from your own
-verified domain looks more professional and is far less likely to land in spam.
+Check delivery status any time by opening `/api/contact` in a browser:
 
-**If sending is not configured, or a send fails**, the enquiry is not lost: the
-full submission is written to the server log, the visitor still sees a success
-message with your phone number and email as a fallback, and the response
-reports `delivered: false`. Transient network and 5xx errors are retried once;
-a 4xx (bad key, unverified sender) is logged as an error rather than retried.
+```json
+{ "transport": "formsubmit", "deliveringTo": "apexwebsolutionsuk@gmail.com" }
+```
 
-Prefer a different provider or want enquiries in a CRM? Replace the single
-`fetch` call in [`src/app/api/contact/route.ts`](src/app/api/contact/route.ts).
+### Upgrading to your own domain (optional, better long-term)
+
+Sending from `enquiries@apexwebsolutionsuk.com` looks more professional, keeps
+customer data out of a third-party forwarder, and is less likely to hit spam.
+When you want that:
+
+1. Sign up at [resend.com](https://resend.com) and verify `apexwebsolutionsuk.com`
+   under *Domains*.
+2. Create an API key.
+3. `cp .env.example .env.local`, paste it into `RESEND_API_KEY`, set
+   `ENQUIRY_FROM_EMAIL` to your own address, and restart.
+
+The endpoint switches to Resend automatically the moment a key is present — no
+code change. `/api/contact` will then report `"transport": "resend"`.
+
+### If delivery ever fails
+
+Nothing is lost. The full submission is written to the server log, the visitor
+still sees a success message with your phone number and email as a fallback,
+and the response reports `delivered: false`. Transient network and 5xx errors
+are retried once; a 4xx is logged rather than retried.
+
+Want enquiries in a CRM instead? Both transports live in one file:
+[`src/app/api/contact/route.ts`](src/app/api/contact/route.ts).
 
 ---
 
